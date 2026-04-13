@@ -11,7 +11,6 @@ import {
   Download, Upload
 } from "lucide-react";
 import { initialDepenses, initialRevenus } from "./initialData";
-import * as XLSX from "xlsx";
 
 /* ═══════ CONSTANTS ═══════ */
 const CATS = ["Achat pièce","Attachement","Quincaillerie","Salaire","Transport",
@@ -726,66 +725,49 @@ export default function BudgetApp(){
     };
 
     const exportExcel=()=>{
-      const wb=XLSX.utils.book_new();
-      // Dépenses sheet
-      const depRows=data.depenses.map(d=>({DATE:d.date,CATEGORIE:d.categorie,MONTANT:d.montant,
-        LIEU:d.lieu||"",NOTE:d.commentaire||"",PERSONNE:d.personne||""}));
-      const wsDep=XLSX.utils.json_to_sheet(depRows);
-      wsDep['!cols']=[{wch:12},{wch:25},{wch:12},{wch:25},{wch:40},{wch:15}];
-      XLSX.utils.book_append_sheet(wb,wsDep,"DEPENSES");
-      // Revenus sheet
-      const revRows=data.revenus.map(r=>({DATE:r.date,SOURCE:r.source,MONTANT:r.montant,
-        LIEU:r.lieu||"",NOTE:r.commentaire||"",PERSONNE:r.personne||""}));
-      const wsRev=XLSX.utils.json_to_sheet(revRows);
-      wsRev['!cols']=[{wch:12},{wch:18},{wch:12},{wch:20},{wch:40},{wch:15}];
-      XLSX.utils.book_append_sheet(wb,wsRev,"REVENUS");
-      // BABAR 50 sheet
+      const esc=v=>{const s=String(v??"").replace(/"/g,'""');return s.includes(",")||s.includes('"')||s.includes('\n')?`"${s}"`:s;};
+      // Dépenses CSV
+      let csv="DATE,CATEGORIE,MONTANT,LIEU,NOTE,PERSONNE\n";
+      data.depenses.forEach(d=>{csv+=`${esc(d.date)},${esc(d.categorie)},${d.montant},${esc(d.lieu)},${esc(d.commentaire)},${esc(d.personne)}\n`;});
+      csv+="\n\n--- REVENUS ---\nDATE,SOURCE,MONTANT,LIEU,NOTE,PERSONNE\n";
+      data.revenus.forEach(r=>{csv+=`${esc(r.date)},${esc(r.source)},${r.montant},${esc(r.lieu)},${esc(r.commentaire)},${esc(r.personne)}\n`;});
       if(data.babar50?.length){
-        const babRows=data.babar50.map(e=>({DATE:e.date,LIBELLE:e.label,CREDIT:e.credit||"",
-          DEBIT:e.debit||"",NOTE:e.commentaire||""}));
-        const wsBab=XLSX.utils.json_to_sheet(babRows);
-        XLSX.utils.book_append_sheet(wb,wsBab,"BABAR50");
+        csv+="\n\n--- BABAR50 ---\nDATE,LIBELLE,CREDIT,DEBIT,NOTE\n";
+        data.babar50.forEach(e=>{csv+=`${esc(e.date)},${esc(e.label)},${e.credit||""},${e.debit||""},${esc(e.commentaire)}\n`;});
       }
-      // Résumé sheet
-      const resume=[
-        {LABEL:"Total Recettes",VALEUR:totalR},
-        {LABEL:"Total Dépenses",VALEUR:totalD},
-        {LABEL:"Solde",VALEUR:solde},
-        {LABEL:"Nb Dépenses",VALEUR:data.depenses.length},
-        {LABEL:"Nb Revenus",VALEUR:data.revenus.length},
-        {LABEL:"Date export",VALEUR:new Date().toLocaleDateString("fr-FR")},
-      ];
-      const wsRes=XLSX.utils.json_to_sheet(resume);
-      XLSX.utils.book_append_sheet(wb,wsRes,"RESUME");
-      XLSX.writeFile(wb,`BudgetPro_${today()}.xlsx`);
-      showT("Excel exporté !");
+      csv+=`\n\n--- RESUME ---\nRecettes,${totalR}\nDépenses,${totalD}\nSolde,${solde}\nNb dépenses,${data.depenses.length}\nNb revenus,${data.revenus.length}\nDate export,${new Date().toLocaleDateString("fr-FR")}\n`;
+      const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");a.href=url;a.download=`BudgetPro_${today()}.csv`;
+      document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+      showT("CSV exporté !");
     };
 
     const importFileRef=useRef();
     const handleImportExcel=async(e)=>{
       const file=e.target.files?.[0];if(!file)return;
       try{
-        const buf=await file.arrayBuffer();
-        const wb=XLSX.read(buf);
-        let imported={dep:0,rev:0};
-        let nd={...data};
-        if(wb.SheetNames.includes("DEPENSES")){
-          const rows=XLSX.utils.sheet_to_json(wb.Sheets["DEPENSES"]);
-          const newDeps=rows.map(r=>({id:uid(),date:String(r.DATE||"").slice(0,10),
-            categorie:r.CATEGORIE||"",montant:Number(r.MONTANT)||0,lieu:r.LIEU||"",
-            commentaire:r.NOTE||"",personne:r.PERSONNE||user?.nom||"Nejmeddine"}));
-          nd.depenses=[...nd.depenses,...newDeps];imported.dep=newDeps.length;
+        const text=await file.text();
+        const lines=text.split("\n").filter(l=>l.trim());
+        let nd={...data};let section="dep";let imported={dep:0,rev:0};
+        for(const line of lines){
+          if(line.includes("--- REVENUS ---")){section="rev";continue;}
+          if(line.includes("--- BABAR50 ---")||line.includes("--- RESUME ---")){section="skip";continue;}
+          if(line.startsWith("DATE,")||section==="skip")continue;
+          const cols=line.match(/(".*?"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,"").replace(/""/g,'"'))||[];
+          if(cols.length<3)continue;
+          if(section==="dep"&&cols[0]&&cols[2]){
+            nd.depenses=[...nd.depenses,{id:uid(),date:cols[0],categorie:cols[1]||"",montant:Number(cols[2])||0,
+              lieu:cols[3]||"",commentaire:cols[4]||"",personne:cols[5]||user?.nom||"Nejmeddine"}];
+            imported.dep++;
+          }else if(section==="rev"&&cols[0]&&cols[2]){
+            nd.revenus=[...nd.revenus,{id:uid(),date:cols[0],source:cols[1]||"",montant:Number(cols[2])||0,
+              lieu:cols[3]||"",commentaire:cols[4]||"",personne:cols[5]||user?.nom||"Nejmeddine"}];
+            imported.rev++;
+          }
         }
-        if(wb.SheetNames.includes("REVENUS")){
-          const rows=XLSX.utils.sheet_to_json(wb.Sheets["REVENUS"]);
-          const newRevs=rows.map(r=>({id:uid(),date:String(r.DATE||"").slice(0,10),
-            source:r.SOURCE||"",montant:Number(r.MONTANT)||0,lieu:r.LIEU||"",
-            commentaire:r.NOTE||"",personne:r.PERSONNE||user?.nom||"Nejmeddine"}));
-          nd.revenus=[...nd.revenus,...newRevs];imported.rev=newRevs.length;
-        }
-        persist(nd);
-        showT(`Importé : ${imported.dep} dépenses, ${imported.rev} revenus`);
-      }catch(err){showT("Erreur import: "+err.message,"error");}
+        persist(nd);showT(`Importé : ${imported.dep} dépenses, ${imported.rev} revenus`);
+      }catch(err){showT("Erreur import","error");}
       e.target.value="";
     };
 
@@ -852,13 +834,13 @@ export default function BudgetApp(){
           <Btn onClick={exportExcel} variant="outline" style={{fontSize:12,padding:"9px 14px"}}>
             <Download size={14}/> Exporter Excel</Btn>
           <Btn onClick={()=>importFileRef.current?.click()} variant="ghost" style={{fontSize:12,padding:"9px 14px"}}>
-            <Upload size={14}/> Importer Excel</Btn>
+            <Upload size={14}/> Importer CSV</Btn>
         </div>
         <div style={{fontSize:10,color:S.dim,marginTop:8}}>
-          L'export génère un fichier avec 4 onglets : DEPENSES, REVENUS, BABAR50, RESUME.
-          L'import lit les onglets DEPENSES et REVENUS et ajoute les données.
+          L'export génère un fichier CSV avec Dépenses, Revenus, BABAR50 et Résumé.
+          Ouvrable dans Excel / Google Sheets. L'import lit un CSV au même format.
         </div>
-        <input ref={importFileRef} type="file" accept=".xlsx,.xls" onChange={handleImportExcel} style={{display:"none"}}/>
+        <input ref={importFileRef} type="file" accept=".csv,.txt" onChange={handleImportExcel} style={{display:"none"}}/>
       </Card>}
     </div>;
   }
