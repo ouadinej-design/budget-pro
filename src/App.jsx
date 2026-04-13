@@ -7,8 +7,11 @@ import {
   Wallet, TrendingDown, TrendingUp, Plus, ChevronLeft, ChevronRight,
   Calendar, Save, Trash2, ArrowUpRight, ArrowDownRight, Building2,
   Banknote, BarChart3, Users, X, Check, Edit3, RefreshCw, Camera,
-  Share2, FileText, Lock, Eye, EyeOff, LogOut, BookOpen, DollarSign
+  Share2, FileText, Lock, Eye, EyeOff, LogOut, BookOpen, DollarSign,
+  Download, Upload
 } from "lucide-react";
+import { initialDepenses, initialRevenus } from "./initialData";
+import * as XLSX from "xlsx";
 
 /* ═══════ CONSTANTS ═══════ */
 const CATS = ["Achat pièce","Attachement","Quincaillerie","Salaire","Transport",
@@ -39,11 +42,12 @@ const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const SK = "budgetpro-v2";
 const defaultData = {
   users: [
-    { id:"admin", nom:"Nej", email:"ouadi.nej@gmail.com", pin:"1234", role:"admin" },
+    { id:"admin", nom:"Nejmeddine", email:"ouadi.nej@gmail.com", pin:"1234", role:"admin" },
     { id:"u2", nom:"Mohamed", email:"jawadouadi67@gmail.com", pin:"0000", role:"user" },
     { id:"u3", nom:"Ramzi", email:"ramzimoh518@gmail.com", pin:"0000", role:"user" },
+    { id:"u4", nom:"Salah", email:"ouadisalaheddin@gmail.com", pin:"0000", role:"user" },
   ],
-  depenses:[], revenus:[], photos:{},
+  depenses:initialDepenses, revenus:initialRevenus, photos:{},
   budgets:[{ id:"b1", nom:"BABAR 50", total:100000000, apparts:50, parAppart:2000000 }],
   babar50:[]
 };
@@ -430,7 +434,7 @@ export default function BudgetApp(){
   /* ═══ SAISIE TAB ═══ */
   function TabSaisie(){
     const [mode,setMode]=useState("dep");
-    const [form,setForm]=useState({date:today(),categorie:"",source:"",lieu:"",montant:"",commentaire:"",personne:user?.nom||"Nej"});
+    const [form,setForm]=useState({date:today(),categorie:"",source:"",lieu:"",montant:"",commentaire:"",personne:user?.nom||"Nejmeddine"});
     const [photos,setPhotos]=useState([]);
     const [editItem,setEditItem]=useState(null);
     const [editModal,setEditModal]=useState(false);
@@ -444,7 +448,7 @@ export default function BudgetApp(){
       photos.forEach(p=>{np[p.id]=p.data;});nd.photos=np;
       if(mode==="dep")nd.depenses=[...data.depenses,entry];else nd.revenus=[...data.revenus,entry];
       persist(nd);
-      setForm({date:today(),categorie:"",source:"",lieu:"",montant:"",commentaire:"",personne:user?.nom||"Nej"});
+      setForm({date:today(),categorie:"",source:"",lieu:"",montant:"",commentaire:"",personne:user?.nom||"Nejmeddine"});
       setPhotos([]);showT(mode==="dep"?"Dépense enregistrée !":"Revenu enregistré !");
     };
 
@@ -721,11 +725,79 @@ export default function BudgetApp(){
       else{try{await navigator.clipboard.writeText(t);showT("Rapport copié !");}catch{showT("Erreur","error");}}
     };
 
+    const exportExcel=()=>{
+      const wb=XLSX.utils.book_new();
+      // Dépenses sheet
+      const depRows=data.depenses.map(d=>({DATE:d.date,CATEGORIE:d.categorie,MONTANT:d.montant,
+        LIEU:d.lieu||"",NOTE:d.commentaire||"",PERSONNE:d.personne||""}));
+      const wsDep=XLSX.utils.json_to_sheet(depRows);
+      wsDep['!cols']=[{wch:12},{wch:25},{wch:12},{wch:25},{wch:40},{wch:15}];
+      XLSX.utils.book_append_sheet(wb,wsDep,"DEPENSES");
+      // Revenus sheet
+      const revRows=data.revenus.map(r=>({DATE:r.date,SOURCE:r.source,MONTANT:r.montant,
+        LIEU:r.lieu||"",NOTE:r.commentaire||"",PERSONNE:r.personne||""}));
+      const wsRev=XLSX.utils.json_to_sheet(revRows);
+      wsRev['!cols']=[{wch:12},{wch:18},{wch:12},{wch:20},{wch:40},{wch:15}];
+      XLSX.utils.book_append_sheet(wb,wsRev,"REVENUS");
+      // BABAR 50 sheet
+      if(data.babar50?.length){
+        const babRows=data.babar50.map(e=>({DATE:e.date,LIBELLE:e.label,CREDIT:e.credit||"",
+          DEBIT:e.debit||"",NOTE:e.commentaire||""}));
+        const wsBab=XLSX.utils.json_to_sheet(babRows);
+        XLSX.utils.book_append_sheet(wb,wsBab,"BABAR50");
+      }
+      // Résumé sheet
+      const resume=[
+        {LABEL:"Total Recettes",VALEUR:totalR},
+        {LABEL:"Total Dépenses",VALEUR:totalD},
+        {LABEL:"Solde",VALEUR:solde},
+        {LABEL:"Nb Dépenses",VALEUR:data.depenses.length},
+        {LABEL:"Nb Revenus",VALEUR:data.revenus.length},
+        {LABEL:"Date export",VALEUR:new Date().toLocaleDateString("fr-FR")},
+      ];
+      const wsRes=XLSX.utils.json_to_sheet(resume);
+      XLSX.utils.book_append_sheet(wb,wsRes,"RESUME");
+      XLSX.writeFile(wb,`BudgetPro_${today()}.xlsx`);
+      showT("Excel exporté !");
+    };
+
+    const importFileRef=useRef();
+    const handleImportExcel=async(e)=>{
+      const file=e.target.files?.[0];if(!file)return;
+      try{
+        const buf=await file.arrayBuffer();
+        const wb=XLSX.read(buf);
+        let imported={dep:0,rev:0};
+        let nd={...data};
+        if(wb.SheetNames.includes("DEPENSES")){
+          const rows=XLSX.utils.sheet_to_json(wb.Sheets["DEPENSES"]);
+          const newDeps=rows.map(r=>({id:uid(),date:String(r.DATE||"").slice(0,10),
+            categorie:r.CATEGORIE||"",montant:Number(r.MONTANT)||0,lieu:r.LIEU||"",
+            commentaire:r.NOTE||"",personne:r.PERSONNE||user?.nom||"Nejmeddine"}));
+          nd.depenses=[...nd.depenses,...newDeps];imported.dep=newDeps.length;
+        }
+        if(wb.SheetNames.includes("REVENUS")){
+          const rows=XLSX.utils.sheet_to_json(wb.Sheets["REVENUS"]);
+          const newRevs=rows.map(r=>({id:uid(),date:String(r.DATE||"").slice(0,10),
+            source:r.SOURCE||"",montant:Number(r.MONTANT)||0,lieu:r.LIEU||"",
+            commentaire:r.NOTE||"",personne:r.PERSONNE||user?.nom||"Nejmeddine"}));
+          nd.revenus=[...nd.revenus,...newRevs];imported.rev=newRevs.length;
+        }
+        persist(nd);
+        showT(`Importé : ${imported.dep} dépenses, ${imported.rev} revenus`);
+      }catch(err){showT("Erreur import: "+err.message,"error");}
+      e.target.value="";
+    };
+
     return <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{fontSize:17,fontWeight:700,color:S.txt}}>
           <FileText size={18} color={S.acc} style={{verticalAlign:"middle",marginRight:7}}/>Rapport</div>
-        <Btn onClick={share} style={{padding:"8px 14px",fontSize:12}}><Share2 size={13}/> Envoyer</Btn>
+        <div style={{display:"flex",gap:5}}>
+          <Btn onClick={exportExcel} variant="outline" style={{padding:"8px 12px",fontSize:11}}>
+            <Download size={13}/> Excel</Btn>
+          <Btn onClick={share} style={{padding:"8px 12px",fontSize:12}}><Share2 size={13}/> Envoyer</Btn>
+        </div>
       </div>
       <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
         {[["jour","Jour"],["sem","Semaine"],["mois","Mois"],["an","Année"],["custom","Période"]].map(([k,l])=>
@@ -772,6 +844,22 @@ export default function BudgetApp(){
               {t._t==="d"?"-":"+"}{fmtFull(t.montant)}</span></div>)}
         {rD.length===0&&rR.length===0&&<div style={{textAlign:"center",padding:16,color:S.dim,fontSize:11}}>Aucune transaction sur cette période</div>}
       </Card>
+
+      {/* Import/Export section */}
+      {adm&&<Card>
+        <div style={{fontSize:13,fontWeight:600,color:S.txt,marginBottom:10}}>Gestion des données</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <Btn onClick={exportExcel} variant="outline" style={{fontSize:12,padding:"9px 14px"}}>
+            <Download size={14}/> Exporter Excel</Btn>
+          <Btn onClick={()=>importFileRef.current?.click()} variant="ghost" style={{fontSize:12,padding:"9px 14px"}}>
+            <Upload size={14}/> Importer Excel</Btn>
+        </div>
+        <div style={{fontSize:10,color:S.dim,marginTop:8}}>
+          L'export génère un fichier avec 4 onglets : DEPENSES, REVENUS, BABAR50, RESUME.
+          L'import lit les onglets DEPENSES et REVENUS et ajoute les données.
+        </div>
+        <input ref={importFileRef} type="file" accept=".xlsx,.xls" onChange={handleImportExcel} style={{display:"none"}}/>
+      </Card>}
     </div>;
   }
 
@@ -834,4 +922,3 @@ export default function BudgetApp(){
     `}</style>
   </div>;
 }
-
